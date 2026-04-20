@@ -45,12 +45,12 @@ app.post("/webhook", (req, res) => {
 
   console.log("Webhook data:", data);
 
-  const inventoryItemId = data.inventory_item_id;
+  const variantId = data.variant_id;
   const available = data.available;
 
   if (available > 0) {
     const users = subscribers.filter(
-      (u) => u.variant_id == inventoryItemId && !u.notified
+      (u) => u.variant_id == variantId && !u.notified
     );
 
     users.forEach((user) => {
