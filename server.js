@@ -1,6 +1,5 @@
 const express = require("express");
 const cors = require("cors");
-const fetch = require("node-fetch");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,12 +20,11 @@ let SHOPIFY_ACCESS_TOKEN = "";
 app.get("/auth", (req, res) => {
   const shop = req.query.shop;
 
-  if (!shop) {
-    return res.send("Shop parameter missing");
-  }
+  if (!shop) return res.send("Shop parameter missing");
 
   const clientId = process.env.SHOPIFY_CLIENT_ID;
-  const redirectUri = "https://notify-backend-2lf3.onrender.com/auth/callback";
+  const redirectUri =
+    "https://notify-backend-2lf3.onrender.com/auth/callback";
   const scopes = "read_inventory,read_products";
 
   const installUrl =
@@ -62,12 +60,11 @@ app.get("/auth/callback", async (req, res) => {
 
     const data = await response.json();
 
-    // ✅ STORE TOKEN HERE
     SHOPIFY_ACCESS_TOKEN = data.access_token;
 
-    console.log("✅ ACCESS TOKEN SAVED:", SHOPIFY_ACCESS_TOKEN);
+    console.log("✅ TOKEN SAVED:", SHOPIFY_ACCESS_TOKEN);
 
-    res.send("App installed successfully 🚀 Token generated");
+    res.send("App installed successfully 🚀");
   } catch (err) {
     console.error(err);
     res.status(500).send("OAuth error");
@@ -89,6 +86,11 @@ async function getInventoryItemId(variantId, shop) {
     );
 
     const data = await response.json();
+
+    console.log("Shopify Response:", data);
+
+    if (!data.variant) return null;
+
     return String(data.variant.inventory_item_id);
   } catch (err) {
     console.error(err);
@@ -161,7 +163,7 @@ app.post("/webhook", (req, res) => {
 });
 
 /* ================================
-   🧪 TEST ROUTE
+   🧪 TEST
 ================================ */
 app.get("/", (req, res) => {
   res.send("Server running 🚀");
