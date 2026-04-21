@@ -7,18 +7,52 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Temporary storage (real project me DB use karo)
+/* ================================
+   📦 MEMORY STORAGE
+================================ */
 let subscribers = [];
+let SHOP_DATA = {}; // token store (optional future use)
 
-// âœ… API to save email
-app.post("/notify", (req, res) => {
+/* ================================
+   🔥 GET INVENTORY ITEM ID (Shopify)
+   (NOTE: requires shop + token in real case)
+================================ */
+async function getInventoryItemId(variantId) {
+  try {
+    // ⚠️ DEMO LOGIC (since no shop/token given in request)
+    // Real Shopify API call yaha lagega
+    console.log("Fetching inventory item for variant:", variantId);
+
+    // 👉 TEMP mapping (replace with Shopify API later)
+    return "inv_" + variantId;
+  } catch (err) {
+    console.error(err);
+    return null;
+  }
+}
+
+/* ================================
+   📩 SAVE SUBSCRIBER
+================================ */
+app.post("/notify", async (req, res) => {
   const { email, product_id, variant_id } = req.body;
 
-  if (!email) {
-    return res.status(400).json({ message: "Email required" });
+  console.log("📩 Notify Request:", req.body);
+
+  if (!email || !variant_id) {
+    return res.status(400).json({
+      message: "email and variant_id required",
+    });
   }
 
-  // duplicate check
+  const inventory_item_id = await getInventoryItemId(variant_id);
+
+  if (!inventory_item_id) {
+    return res.status(500).json({
+      message: "Inventory ID not found",
+    });
+  }
+
   const exists = subscribers.find(
     (u) => u.email === email && u.variant_id === variant_id
   );
@@ -31,45 +65,58 @@ app.post("/notify", (req, res) => {
     email,
     product_id,
     variant_id,
+    inventory_item_id,
     notified: false,
   });
 
-  console.log("Saved:", subscribers);
+  console.log("📦 Subscribers:", subscribers);
 
   res.json({ success: true });
 });
 
-// âœ… Shopify Webhook (REAL structure)
+/* ================================
+   🔔 WEBHOOK (STOCK UPDATE)
+================================ */
 app.post("/webhook", (req, res) => {
   const data = req.body;
 
-  console.log("Webhook data:", data);
+  console.log("📦 Webhook received:", data);
 
-  const variantId = data.variant_id;
-  const available = data.available;
+  const inventoryItemId = String(data.inventory_item_id);
+  const available = Number(data.available || 0);
 
   if (available > 0) {
     const users = subscribers.filter(
-      (u) => u.variant_id == variantId && !u.notified
+      (u) =>
+        u.inventory_item_id === inventoryItemId &&
+        u.notified === false
     );
 
-    users.forEach((user) => {
-      console.log(`ðŸ“§ Send email to: ${user.email}`);
+    if (users.length > 0) {
+      users.forEach((user) => {
+        console.log("📧 Notify user:", user.email);
+        user.notified = true;
+      });
 
-      // ðŸ‘‰ yaha real email function call hoga (next step)
-      user.notified = true;
-    });
+      console.log("✅ SUCCESS: Stock matched & notifications sent");
+    } else {
+      console.log("⚠️ No matching subscribers found");
+    }
   }
 
   res.sendStatus(200);
 });
 
-// âœ… Test route
+/* ================================
+   🏠 HOME
+================================ */
 app.get("/", (req, res) => {
-  res.send("Server running ðŸš€");
+  res.send("Server running 🚀");
 });
 
-// Start server
+/* ================================
+   🚀 START SERVER
+================================ */
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log("Server running on port", PORT);
 });
