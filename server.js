@@ -10,52 +10,63 @@ app.use(express.json());
 let subscribers = [];
 
 /* ================================
-   🔐 INSTALL (OAuth start)
+   🚀 START OAUTH
 ================================ */
-app.get("/install", (req, res) => {
-  const shop = process.env.SHOP_DOMAIN;
+app.get("/auth", (req, res) => {
+  const shop = req.query.shop;
+
+  if (!shop) {
+    return res.send("Shop parameter missing");
+  }
+
   const clientId = process.env.SHOPIFY_CLIENT_ID;
-  const redirectUri = `https://notify-backend-2lf3.onrender.com/callback`;
+  const redirectUri = "https://notify-backend-2lf3.onrender.com/auth/callback";
   const scopes = "read_inventory,read_products";
 
-  const installUrl = `https://${shop}/admin/oauth/authorize?client_id=${clientId}&scope=${scopes}&redirect_uri=${redirectUri}&response_type=code`;
+  const installUrl =
+    `https://${shop}/admin/oauth/authorize` +
+    `?client_id=${clientId}` +
+    `&scope=${scopes}` +
+    `&redirect_uri=${redirectUri}`;
 
   res.redirect(installUrl);
 });
 
 /* ================================
-   🔐 CALLBACK (Access token)
+   🔐 CALLBACK (TOKEN GENERATION)
 ================================ */
-app.get("/callback", async (req, res) => {
-  const { code } = req.query;
-  const shop = process.env.SHOP_DOMAIN;
-  const clientId = process.env.SHOPIFY_CLIENT_ID;
-  const clientSecret = process.env.SHOPIFY_CLIENT_SECRET;
+app.get("/auth/callback", async (req, res) => {
+  const { code, shop } = req.query;
+
+  if (!code) return res.send("No code received");
 
   try {
-    const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        client_id: clientId,
-        client_secret: clientSecret,
-        code: code
-      })
-    });
+    const response = await fetch(
+      `https://${shop}/admin/oauth/access_token`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_id: process.env.SHOPIFY_CLIENT_ID,
+          client_secret: process.env.SHOPIFY_CLIENT_SECRET,
+          code
+        })
+      }
+    );
 
     const data = await response.json();
 
     console.log("✅ ACCESS TOKEN:", data.access_token);
 
-    res.send("App installed successfully ✅");
+    res.send("App installed successfully 🚀 Token generated");
   } catch (err) {
     console.error(err);
-    res.status(500).send("Error installing app");
+    res.status(500).send("OAuth error");
   }
 });
 
 /* ================================
-   🔥 FUNCTION: Get inventory_item_id
+   🔥 INVENTORY FETCH
 ================================ */
 async function getInventoryItemId(variantId) {
   try {
@@ -72,7 +83,7 @@ async function getInventoryItemId(variantId) {
 
     return String(data.variant.inventory_item_id);
   } catch (err) {
-    console.error("Error fetching inventory item:", err);
+    console.error(err);
     return null;
   }
 }
@@ -87,64 +98,49 @@ app.post("/notify", async (req, res) => {
     return res.status(400).json({ message: "Email & variant_id required" });
   }
 
-  try {
-    // 🔥 inventory_item_id backend se niklega
-    const inventory_item_id = await getInventoryItemId(variant_id);
+  const inventory_item_id = await getInventoryItemId(variant_id);
 
-    if (!inventory_item_id) {
-      return res.status(500).json({ message: "Inventory item not found" });
-    }
-
-    const exists = subscribers.find(
-      (u) => u.email === email && u.variant_id == variant_id
-    );
-
-    if (exists) {
-      return res.json({ message: "Already subscribed" });
-    }
-
-    subscribers.push({
-      email,
-      product_id,
-      variant_id,
-      inventory_item_id,
-      notified: false,
-    });
-
-    console.log("📦 Subscribers:", subscribers);
-
-    res.json({ success: true });
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Server error" });
+  if (!inventory_item_id) {
+    return res.status(500).json({ message: "Inventory item not found" });
   }
+
+  const exists = subscribers.find(
+    (u) => u.email === email && u.variant_id == variant_id
+  );
+
+  if (exists) {
+    return res.json({ message: "Already subscribed" });
+  }
+
+  subscribers.push({
+    email,
+    product_id,
+    variant_id,
+    inventory_item_id,
+    notified: false,
+  });
+
+  console.log("📦 Subscribers:", subscribers);
+
+  res.json({ success: true });
 });
 
 /* ================================
-   🔔 WEBHOOK (Inventory update)
+   🔔 WEBHOOK
 ================================ */
 app.post("/webhook", (req, res) => {
   const data = req.body;
 
-  console.log("🔥 Webhook received:", data);
-
   const inventoryItemId = String(data.inventory_item_id);
   const available = data.available ?? 0;
-
-  if (!inventoryItemId) {
-    return res.sendStatus(200);
-  }
 
   const users = subscribers.filter(
     (u) => u.inventory_item_id === inventoryItemId && !u.notified
   );
 
-  console.log("👥 Matched users:", users.length);
-
   if (available > 0 && users.length > 0) {
     users.forEach((user) => {
-      console.log(`📧 Send email to: ${user.email}`);
+      console.log(`📧 Email to: ${user.email}`);
       user.notified = true;
     });
   }
@@ -153,7 +149,7 @@ app.post("/webhook", (req, res) => {
 });
 
 /* ================================
-   🧪 TEST ROUTE
+   🧪 TEST
 ================================ */
 app.get("/", (req, res) => {
   res.send("Server running 🚀");
