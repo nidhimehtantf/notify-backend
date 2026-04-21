@@ -8,6 +8,10 @@ app.use(cors());
 app.use(express.json());
 
 let subscribers = [];
+
+/* ================================
+   🔐 INSTALL (OAuth start)
+================================ */
 app.get("/install", (req, res) => {
   const shop = process.env.SHOP_DOMAIN;
   const clientId = process.env.SHOPIFY_CLIENT_ID;
@@ -19,32 +23,41 @@ app.get("/install", (req, res) => {
   res.redirect(installUrl);
 });
 
-// ✅ NEW — Callback route (token yahan milega)
+/* ================================
+   🔐 CALLBACK (Access token)
+================================ */
 app.get("/callback", async (req, res) => {
   const { code } = req.query;
   const shop = process.env.SHOP_DOMAIN;
   const clientId = process.env.SHOPIFY_CLIENT_ID;
   const clientSecret = process.env.SHOPIFY_CLIENT_SECRET;
 
-  const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      client_id: clientId,
-      client_secret: clientSecret,
-      code: code
-    })
-  });
+  try {
+    const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: clientId,
+        client_secret: clientSecret,
+        code: code
+      })
+    });
 
-  const data = await response.json();
-  console.log("✅ ACCESS TOKEN:", data.access_token);
-  res.send(`Your token: ${data.access_token}`);
+    const data = await response.json();
+
+    console.log("✅ ACCESS TOKEN:", data.access_token);
+
+    res.send("App installed successfully ✅");
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Error installing app");
+  }
 });
 
-// ✅ Variant route (inventory_item_id fetch karne ke liye)
-app.get("/variant/:variantId", async (req, res) => {
-  const { variantId } = req.params;
-
+/* ================================
+   🔥 FUNCTION: Get inventory_item_id
+================================ */
+async function getInventoryItemId(variantId) {
   try {
     const response = await fetch(
       `https://${process.env.SHOP_DOMAIN}/admin/api/2024-01/variants/${variantId}.json`,
@@ -54,74 +67,94 @@ app.get("/variant/:variantId", async (req, res) => {
         }
       }
     );
+
     const data = await response.json();
-    res.json({ inventory_item_id: data.variant.inventory_item_id });
+
+    return String(data.variant.inventory_item_id);
+  } catch (err) {
+    console.error("Error fetching inventory item:", err);
+    return null;
+  }
+}
+
+/* ================================
+   📩 NOTIFY API
+================================ */
+app.post("/notify", async (req, res) => {
+  const { email, product_id, variant_id } = req.body;
+
+  if (!email || !variant_id) {
+    return res.status(400).json({ message: "Email & variant_id required" });
+  }
+
+  try {
+    // 🔥 inventory_item_id backend se niklega
+    const inventory_item_id = await getInventoryItemId(variant_id);
+
+    if (!inventory_item_id) {
+      return res.status(500).json({ message: "Inventory item not found" });
+    }
+
+    const exists = subscribers.find(
+      (u) => u.email === email && u.variant_id == variant_id
+    );
+
+    if (exists) {
+      return res.json({ message: "Already subscribed" });
+    }
+
+    subscribers.push({
+      email,
+      product_id,
+      variant_id,
+      inventory_item_id,
+      notified: false,
+    });
+
+    console.log("📦 Subscribers:", subscribers);
+
+    res.json({ success: true });
+
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Failed to fetch variant" });
+    res.status(500).json({ message: "Server error" });
   }
 });
 
-app.post("/notify", (req, res) => {
-  const { email, product_id, variant_id, inventory_item_id } = req.body;
-
-  if (!email || !variant_id || !inventory_item_id) {
-    return res.status(400).json({ message: "Email, variant_id & inventory_item_id required" });
-  }
-
-  const exists = subscribers.find(
-    (u) => u.email === email && u.variant_id == variant_id
-  );
-
-  if (exists) {
-    return res.json({ message: "Already subscribed" });
-  }
-
-  subscribers.push({
-    email,
-    product_id,
-    variant_id,
-    inventory_item_id: String(inventory_item_id), // ✅ string mein save karo
-    notified: false,
-  });
-
-  console.log("Saved subscribers:", subscribers);
-  res.json({ success: true });
-});
-
-
-// ✅ WEBHOOK — ab sahi match hoga
+/* ================================
+   🔔 WEBHOOK (Inventory update)
+================================ */
 app.post("/webhook", (req, res) => {
   const data = req.body;
+
   console.log("🔥 Webhook received:", data);
 
   const inventoryItemId = String(data.inventory_item_id);
   const available = data.available ?? 0;
 
   if (!inventoryItemId) {
-    console.log("❌ No inventory_item_id found");
     return res.sendStatus(200);
   }
 
-  console.log("Inventory Item ID:", inventoryItemId);
-  console.log("Available:", available);
-
-  // ✅ Ab inventory_item_id se match hoga
   const users = subscribers.filter(
     (u) => u.inventory_item_id === inventoryItemId && !u.notified
   );
 
-  console.log("Matched users:", users.length);
+  console.log("👥 Matched users:", users.length);
 
   if (available > 0 && users.length > 0) {
     users.forEach((user) => {
-      console.log(`📧 Sending email to: ${user.email}`);
+      console.log(`📧 Send email to: ${user.email}`);
       user.notified = true;
     });
   }
 
   res.sendStatus(200);
 });
+
+/* ================================
+   🧪 TEST ROUTE
+================================ */
 app.get("/", (req, res) => {
   res.send("Server running 🚀");
 });
