@@ -1,6 +1,5 @@
 const express = require("express");
 const cors = require("cors");
-const nodemailer = require("nodemailer");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,32 +14,7 @@ let subscribers = [];
 let SHOP_DATA = {};
 
 /* ================================
-   📧 EMAIL SETUP
-================================ */
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
-
-/* ================================
-   📧 SEND EMAIL FUNCTION
-================================ */
-async function sendEmail(to, productId) {
-  await transporter.sendMail({
-    from: process.env.EMAIL_USER,
-    to,
-    subject: "🎉 Product Back in Stock!",
-    text: `Good news! Product ${productId} is now available.`,
-  });
-
-  console.log("📧 Email sent to:", to);
-}
-
-/* ================================
-   🚀 AUTH
+   🚀 SHOPIFY AUTH START
 ================================ */
 app.get("/auth", (req, res) => {
   const shop = req.query.shop;
@@ -49,14 +23,14 @@ app.get("/auth", (req, res) => {
   const installUrl =
     `https://${shop}/admin/oauth/authorize` +
     `?client_id=${process.env.SHOPIFY_CLIENT_ID}` +
-    `&scope=read_inventory,read_products` +
-    `&redirect_uri=https://notify-backend-2lf3.onrender.com/auth/callback`;
+    `&scope=read_products,read_inventory` +
+    `&redirect_uri=${process.env.REDIRECT_URI}`;
 
   res.redirect(installUrl);
 });
 
 /* ================================
-   🔐 CALLBACK
+   🔐 CALLBACK (SAVE TOKEN)
 ================================ */
 app.get("/auth/callback", async (req, res) => {
   const { code, shop } = req.query;
@@ -79,7 +53,7 @@ app.get("/auth/callback", async (req, res) => {
 
     SHOP_DATA[shop] = data.access_token;
 
-    console.log("✅ TOKEN SAVED FOR:", shop);
+    console.log("✅ Token saved for:", shop);
 
     res.send("App installed successfully 🚀");
   } catch (err) {
@@ -89,12 +63,11 @@ app.get("/auth/callback", async (req, res) => {
 });
 
 /* ================================
-   🔥 INVENTORY FETCH
+   🔥 GET INVENTORY ITEM ID
 ================================ */
 async function getInventoryItemId(variantId, shop) {
   try {
     const token = SHOP_DATA[shop];
-
     if (!token) return null;
 
     const response = await fetch(
@@ -118,12 +91,12 @@ async function getInventoryItemId(variantId, shop) {
 }
 
 /* ================================
-   📩 NOTIFY API
+   📩 SUBSCRIBE API (FRONTEND)
 ================================ */
 app.post("/notify", async (req, res) => {
   const { email, product_id, variant_id, shop } = req.body;
 
-  console.log("📩 Notify Request:", req.body);
+  console.log("📩 Notify request:", req.body);
 
   if (!email || !variant_id || !shop) {
     return res.status(400).json({
@@ -139,8 +112,11 @@ app.post("/notify", async (req, res) => {
     });
   }
 
-  const exists = subscribers.find(
-    (u) => u.email === email && u.variant_id == variant_id
+  const exists = subscribers.some(
+    (u) =>
+      u.email === email &&
+      u.variant_id === variant_id &&
+      u.shop === shop
   );
 
   if (exists) {
@@ -154,46 +130,61 @@ app.post("/notify", async (req, res) => {
     inventory_item_id,
     shop,
     notified: false,
+    createdAt: new Date(),
   });
 
   console.log("📦 Subscribers:", subscribers);
 
-  res.json({ success: true });
+  res.json({
+    success: true,
+    message: "Subscription saved",
+  });
 });
 
 /* ================================
-   🔔 WEBHOOK
+   🔔 WEBHOOK (STOCK UPDATE)
 ================================ */
 app.post("/webhook", async (req, res) => {
   const data = req.body;
 
-  const inventoryItemId = String(data.inventory_item_id);
-  const available = data.available ?? 0;
+  console.log("📦 Webhook received:", data);
 
-  if (available <= 0) return res.sendStatus(200);
+  const inventoryItemId = String(data.inventory_item_id);
+  const available = Number(data.available || 0);
+
+  if (available <= 0) {
+    return res.status(200).json({
+      message: "No stock available",
+    });
+  }
 
   const users = subscribers.filter(
     (u) =>
-      u.inventory_item_id === inventoryItemId && !u.notified
+      u.inventory_item_id === inventoryItemId &&
+      u.notified === false
   );
 
-  for (const user of users) {
-    try {
-      await sendEmail(user.email, user.product_id);
-
-      user.notified = true;
-
-      console.log("📧 Sent:", user.email);
-    } catch (err) {
-      console.error("Email error:", err);
-    }
+  if (users.length === 0) {
+    return res.status(200).json({
+      message: "No subscribers found",
+    });
   }
 
-  res.sendStatus(200);
+  // mark notified (NO EMAIL, ONLY STATUS UPDATE)
+  for (const user of users) {
+    user.notified = true;
+    console.log("✅ Marked notified:", user.email);
+  }
+
+  res.status(200).json({
+    success: true,
+    message: "Stock updated & subscribers marked notified",
+    updatedUsers: users.length,
+  });
 });
 
 /* ================================
-   🧪 HOME
+   🏠 HOME
 ================================ */
 app.get("/", (req, res) => {
   res.send("Server running 🚀");
