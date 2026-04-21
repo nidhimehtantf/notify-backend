@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const nodemailer = require("nodemailer");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -7,12 +8,36 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+/* ================================
+   📦 MEMORY STORAGE
+================================ */
 let subscribers = [];
+let SHOP_DATA = {};
 
 /* ================================
-   🚀 SHOP TOKEN STORAGE
+   📧 EMAIL SETUP
 ================================ */
-let SHOP_DATA = {};
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
+
+/* ================================
+   📧 SEND EMAIL FUNCTION
+================================ */
+async function sendEmail(to, productId) {
+  await transporter.sendMail({
+    from: process.env.EMAIL_USER,
+    to,
+    subject: "🎉 Product Back in Stock!",
+    text: `Good news! Product ${productId} is now available.`,
+  });
+
+  console.log("📧 Email sent to:", to);
+}
 
 /* ================================
    🚀 AUTH
@@ -52,11 +77,6 @@ app.get("/auth/callback", async (req, res) => {
 
     const data = await response.json();
 
-    if (!data.access_token) {
-      return res.status(400).send("Token not received");
-    }
-
-    // ✅ SAVE PER SHOP
     SHOP_DATA[shop] = data.access_token;
 
     console.log("✅ TOKEN SAVED FOR:", shop);
@@ -75,10 +95,7 @@ async function getInventoryItemId(variantId, shop) {
   try {
     const token = SHOP_DATA[shop];
 
-    if (!token) {
-      console.log("❌ No token for shop:", shop);
-      return null;
-    }
+    if (!token) return null;
 
     const response = await fetch(
       `https://${shop}/admin/api/2024-01/variants/${variantId}.json`,
@@ -91,14 +108,11 @@ async function getInventoryItemId(variantId, shop) {
 
     const data = await response.json();
 
-    if (!data.variant) {
-      console.log("❌ Invalid variant response:", data);
-      return null;
-    }
+    if (!data.variant) return null;
 
     return String(data.variant.inventory_item_id);
   } catch (err) {
-    console.error("Inventory error:", err);
+    console.error(err);
     return null;
   }
 }
@@ -150,21 +164,29 @@ app.post("/notify", async (req, res) => {
 /* ================================
    🔔 WEBHOOK
 ================================ */
-app.post("/webhook", (req, res) => {
+app.post("/webhook", async (req, res) => {
   const data = req.body;
 
   const inventoryItemId = String(data.inventory_item_id);
   const available = data.available ?? 0;
 
+  if (available <= 0) return res.sendStatus(200);
+
   const users = subscribers.filter(
-    (u) => u.inventory_item_id === inventoryItemId && !u.notified
+    (u) =>
+      u.inventory_item_id === inventoryItemId && !u.notified
   );
 
-  if (available > 0 && users.length > 0) {
-    users.forEach((user) => {
-      console.log("📧 EMAIL READY:", user.email);
+  for (const user of users) {
+    try {
+      await sendEmail(user.email, user.product_id);
+
       user.notified = true;
-    });
+
+      console.log("📧 Sent:", user.email);
+    } catch (err) {
+      console.error("Email error:", err);
+    }
   }
 
   res.sendStatus(200);
@@ -178,7 +200,7 @@ app.get("/", (req, res) => {
 });
 
 /* ================================
-   🚀 START
+   🚀 START SERVER
 ================================ */
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
