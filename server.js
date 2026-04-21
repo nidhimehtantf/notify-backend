@@ -10,10 +10,9 @@ app.use(express.json());
 let subscribers = [];
 
 /* ================================
-   🚀 SHOP TOKEN STORAGE (TEMP)
+   🚀 SHOP TOKEN STORAGE
 ================================ */
-let SHOP_DATA = {}; 
-// format: { shop: access_token }
+let SHOP_DATA = {};
 
 /* ================================
    🚀 AUTH
@@ -37,35 +36,49 @@ app.get("/auth", (req, res) => {
 app.get("/auth/callback", async (req, res) => {
   const { code, shop } = req.query;
 
-  const response = await fetch(
-    `https://${shop}/admin/oauth/access_token`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        client_id: process.env.SHOPIFY_CLIENT_ID,
-        client_secret: process.env.SHOPIFY_CLIENT_SECRET,
-        code,
-      }),
+  try {
+    const response = await fetch(
+      `https://${shop}/admin/oauth/access_token`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          client_id: process.env.SHOPIFY_CLIENT_ID,
+          client_secret: process.env.SHOPIFY_CLIENT_SECRET,
+          code,
+        }),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!data.access_token) {
+      return res.status(400).send("Token not received");
     }
-  );
 
-  const data = await response.json();
+    // ✅ SAVE PER SHOP
+    SHOP_DATA[shop] = data.access_token;
 
-  // ✅ store per shop token
-  SHOP_DATA[shop] = data.access_token;
+    console.log("✅ TOKEN SAVED FOR:", shop);
 
-  console.log("TOKEN SAVED FOR SHOP:", shop);
-
-  res.send("App installed successfully 🚀");
+    res.send("App installed successfully 🚀");
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("OAuth error");
+  }
 });
 
 /* ================================
-   🔥 GET INVENTORY ID
+   🔥 INVENTORY FETCH
 ================================ */
 async function getInventoryItemId(variantId, shop) {
   try {
     const token = SHOP_DATA[shop];
+
+    if (!token) {
+      console.log("❌ No token for shop:", shop);
+      return null;
+    }
 
     const response = await fetch(
       `https://${shop}/admin/api/2024-01/variants/${variantId}.json`,
@@ -78,11 +91,14 @@ async function getInventoryItemId(variantId, shop) {
 
     const data = await response.json();
 
-    if (!data.variant) return null;
+    if (!data.variant) {
+      console.log("❌ Invalid variant response:", data);
+      return null;
+    }
 
     return String(data.variant.inventory_item_id);
   } catch (err) {
-    console.error(err);
+    console.error("Inventory error:", err);
     return null;
   }
 }
@@ -92,6 +108,8 @@ async function getInventoryItemId(variantId, shop) {
 ================================ */
 app.post("/notify", async (req, res) => {
   const { email, product_id, variant_id, shop } = req.body;
+
+  console.log("📩 Notify Request:", req.body);
 
   if (!email || !variant_id || !shop) {
     return res.status(400).json({
@@ -107,6 +125,14 @@ app.post("/notify", async (req, res) => {
     });
   }
 
+  const exists = subscribers.find(
+    (u) => u.email === email && u.variant_id == variant_id
+  );
+
+  if (exists) {
+    return res.json({ message: "Already subscribed" });
+  }
+
   subscribers.push({
     email,
     product_id,
@@ -116,7 +142,7 @@ app.post("/notify", async (req, res) => {
     notified: false,
   });
 
-  console.log("SUBSCRIBER SAVED:", subscribers);
+  console.log("📦 Subscribers:", subscribers);
 
   res.json({ success: true });
 });
@@ -134,7 +160,7 @@ app.post("/webhook", (req, res) => {
     (u) => u.inventory_item_id === inventoryItemId && !u.notified
   );
 
-  if (available > 0) {
+  if (available > 0 && users.length > 0) {
     users.forEach((user) => {
       console.log("📧 EMAIL READY:", user.email);
       user.notified = true;
@@ -151,6 +177,9 @@ app.get("/", (req, res) => {
   res.send("Server running 🚀");
 });
 
+/* ================================
+   🚀 START
+================================ */
 app.listen(PORT, () => {
-  console.log("Server running on", PORT);
+  console.log("Server running on port", PORT);
 });
