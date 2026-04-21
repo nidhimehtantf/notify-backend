@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const fetch = require("node-fetch");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -8,6 +9,11 @@ app.use(cors());
 app.use(express.json());
 
 let subscribers = [];
+
+/* ================================
+   🔐 GLOBAL TOKEN STORAGE
+================================ */
+let SHOPIFY_ACCESS_TOKEN = "";
 
 /* ================================
    🚀 START OAUTH
@@ -49,14 +55,17 @@ app.get("/auth/callback", async (req, res) => {
         body: JSON.stringify({
           client_id: process.env.SHOPIFY_CLIENT_ID,
           client_secret: process.env.SHOPIFY_CLIENT_SECRET,
-          code
-        })
+          code,
+        }),
       }
     );
 
     const data = await response.json();
 
-    console.log("✅ ACCESS TOKEN:", data.access_token);
+    // ✅ STORE TOKEN HERE
+    SHOPIFY_ACCESS_TOKEN = data.access_token;
+
+    console.log("✅ ACCESS TOKEN SAVED:", SHOPIFY_ACCESS_TOKEN);
 
     res.send("App installed successfully 🚀 Token generated");
   } catch (err) {
@@ -68,19 +77,18 @@ app.get("/auth/callback", async (req, res) => {
 /* ================================
    🔥 INVENTORY FETCH
 ================================ */
-async function getInventoryItemId(variantId) {
+async function getInventoryItemId(variantId, shop) {
   try {
     const response = await fetch(
-      `https://${process.env.SHOP_DOMAIN}/admin/api/2024-01/variants/${variantId}.json`,
+      `https://${shop}/admin/api/2024-01/variants/${variantId}.json`,
       {
         headers: {
-          "X-Shopify-Access-Token": process.env.SHOPIFY_ACCESS_TOKEN
-        }
+          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+        },
       }
     );
 
     const data = await response.json();
-
     return String(data.variant.inventory_item_id);
   } catch (err) {
     console.error(err);
@@ -92,16 +100,20 @@ async function getInventoryItemId(variantId) {
    📩 NOTIFY API
 ================================ */
 app.post("/notify", async (req, res) => {
-  const { email, product_id, variant_id } = req.body;
+  const { email, product_id, variant_id, shop } = req.body;
 
-  if (!email || !variant_id) {
-    return res.status(400).json({ message: "Email & variant_id required" });
+  if (!email || !variant_id || !shop) {
+    return res.status(400).json({
+      message: "Email, shop & variant_id required",
+    });
   }
 
-  const inventory_item_id = await getInventoryItemId(variant_id);
+  const inventory_item_id = await getInventoryItemId(variant_id, shop);
 
   if (!inventory_item_id) {
-    return res.status(500).json({ message: "Inventory item not found" });
+    return res.status(500).json({
+      message: "Inventory item not found",
+    });
   }
 
   const exists = subscribers.find(
@@ -149,12 +161,15 @@ app.post("/webhook", (req, res) => {
 });
 
 /* ================================
-   🧪 TEST
+   🧪 TEST ROUTE
 ================================ */
 app.get("/", (req, res) => {
   res.send("Server running 🚀");
 });
 
+/* ================================
+   🚀 START SERVER
+================================ */
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
