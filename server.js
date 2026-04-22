@@ -29,7 +29,7 @@ async function sendKlaviyoEvent(email) {
         data: {
           type: "event",
           attributes: {
-            properties: {   // ✅ REQUIRED FIELD
+            properties: {
               source: "shopify",
             },
             profile: {
@@ -53,8 +53,15 @@ async function sendKlaviyoEvent(email) {
       }),
     });
 
-    const data = await res.json();
-    console.log("✅ Klaviyo event sent:", data);
+    // ✅ SAFE RESPONSE HANDLING
+    if (res.status === 202 || res.status === 200) {
+      console.log("✅ Klaviyo event sent successfully");
+      return;
+    }
+
+    // ❗ Agar error ho tab hi JSON parse karo
+    const text = await res.text();
+    console.log("⚠️ Klaviyo response:", text);
 
   } catch (err) {
     console.error("❌ Klaviyo error:", err);
