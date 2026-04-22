@@ -178,5 +178,5 @@ app.post("/webhook", async (req, res) => {
 ================================= */
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  sendKlaviyoEvent("dwarkeshsaxena.ntf@gmal.com");
+ 
 });
