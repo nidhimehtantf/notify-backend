@@ -1,6 +1,5 @@
 const express = require("express");
 const cors = require("cors");
-const fetch = require("node-fetch");
 
 const app = express();
 app.use(cors());
@@ -8,26 +7,27 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
-// 🔐 Shopify credentials (Render env me already add kiye honge)
+// 🔐 Shopify Access Token (Render ENV me set karo)
 const ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
-/* ================================
-   📩 NOTIFY API
-================================ */
+// 📦 Temporary storage (production me DB use karo)
+let subscribers = [];
+
+/* =================================
+   📩 NOTIFY API (Frontend hit karega)
+================================= */
 app.post("/notify", async (req, res) => {
   try {
-    const { email, product_id, variant_id, shop } = req.body;
+    const { email, variant_id, shop } = req.body;
 
-    console.log("📥 Request aayi:", req.body);
+    console.log("📥 Notify Request:", req.body);
 
-    if (!variant_id || !shop) {
-      return res.status(400).json({ error: "Missing data" });
+    if (!email || !variant_id || !shop) {
+      return res.status(400).json({ error: "Missing fields" });
     }
 
-    /* ================================
-       🟢 STEP 1: Variant → Inventory Item ID
-    ================================= */
-    const variantRes = await fetch(
+    // 🟢 STEP 1: Variant → Inventory Item ID
+    const response = await fetch(
       `https://${shop}/admin/api/2024-01/variants/${variant_id}.json`,
       {
         headers: {
@@ -37,55 +37,77 @@ app.post("/notify", async (req, res) => {
       }
     );
 
-    const variantData = await variantRes.json();
+    const data = await response.json();
 
-    if (!variantData.variant) {
+    if (!data.variant) {
+      console.log("❌ Variant not found");
       return res.status(404).json({ error: "Variant not found" });
     }
 
-    const inventory_item_id = variantData.variant.inventory_item_id;
+    const inventory_item_id = data.variant.inventory_item_id;
 
     console.log("✅ Inventory Item ID:", inventory_item_id);
 
-    /* ================================
-       🟢 STEP 2: Inventory Levels (Stock)
-    ================================= */
-    const inventoryRes = await fetch(
-      `https://${shop}/admin/api/2024-01/inventory_levels.json?inventory_item_ids=${inventory_item_id}`,
-      {
-        headers: {
-          "X-Shopify-Access-Token": ACCESS_TOKEN,
-        },
-      }
-    );
-
-    const inventoryData = await inventoryRes.json();
-
-    console.log("📦 Inventory Data:", inventoryData);
-
-    const available =
-      inventoryData.inventory_levels?.[0]?.available ?? 0;
-
-    console.log("📊 Available Stock:", available);
-
-    /* ================================
-       🟢 RESPONSE
-    ================================= */
-    res.json({
-      success: true,
+    // 🟢 STEP 2: Save subscriber (IMPORTANT)
+    subscribers.push({
+      email,
       inventory_item_id,
-      available,
     });
 
+    console.log("📌 Subscribers List:", subscribers);
+
+    res.json({ success: true });
+
   } catch (error) {
-    console.error("❌ Error:", error);
+    console.error("❌ Error in /notify:", error);
     res.status(500).json({ error: "Server error" });
   }
 });
 
-/* ================================
-   🚀 START SERVER
-================================ */
+
+/* =================================
+   🔔 WEBHOOK (Shopify se aayega)
+================================= */
+app.post("/webhook", (req, res) => {
+  try {
+    const { inventory_item_id, available } = req.body;
+
+    console.log("📦 Webhook received:", req.body);
+
+    console.log("📌 Stored subscribers:", subscribers);
+    console.log("🔍 Incoming inventory_item_id:", inventory_item_id);
+
+    // 🟢 MATCH USERS
+    const matchedUsers = subscribers.filter(
+      (sub) =>
+        sub.inventory_item_id.toString() === inventory_item_id.toString()
+    );
+
+    console.log("🎯 Matched Users:", matchedUsers);
+
+    if (matchedUsers.length === 0) {
+      console.log("⚠️ No matching subscribers found");
+    } else {
+      console.log("✅ Users found → send email");
+
+      // 👉 yaha email logic add kar sakte ho
+      matchedUsers.forEach((user) => {
+        console.log(`📧 Send email to: ${user.email}`);
+      });
+    }
+
+    res.sendStatus(200);
+
+  } catch (error) {
+    console.error("❌ Webhook error:", error);
+    res.sendStatus(500);
+  }
+});
+
+
+/* =================================
+   🚀 SERVER START
+================================= */
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
