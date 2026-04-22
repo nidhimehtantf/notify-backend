@@ -1,195 +1,91 @@
 const express = require("express");
 const cors = require("cors");
+const fetch = require("node-fetch");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
 app.use(cors());
 app.use(express.json());
 
-/* ================================
-   📦 MEMORY STORAGE
-================================ */
-let subscribers = [];
-let SHOP_DATA = {};
+const PORT = process.env.PORT || 3000;
+
+// 🔐 Shopify credentials (Render env me already add kiye honge)
+const ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
 /* ================================
-   🔐 SHOPIFY AUTH CALLBACK
-================================ */
-app.get("/auth/callback", async (req, res) => {
-  const { code, shop } = req.query;
-
-  console.log("🔁 CALLBACK HIT:", req.query);
-
-  try {
-    const response = await fetch(
-      `https://${shop}/admin/oauth/access_token`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          client_id: process.env.SHOPIFY_CLIENT_ID,
-          client_secret: process.env.SHOPIFY_CLIENT_SECRET,
-          code,
-        }),
-      }
-    );
-
-    const data = await response.json();
-
-    if (!data.access_token) {
-      console.log("❌ Token error response:", data);
-      return res.status(500).send("OAuth failed");
-    }
-
-    SHOP_DATA[shop] = data.access_token;
-
-    console.log("✅ TOKEN SAVED:", shop);
-
-    res.send("App installed successfully 🚀");
-  } catch (err) {
-    console.error("❌ OAuth error:", err.message);
-    res.status(500).send("OAuth error");
-  }
-});
-
-/* ================================
-   🔥 GET INVENTORY ITEM ID (REAL SHOPIFY)
-================================ */
-async function getInventoryItemId(variantId, shop, token) {
-  try {
-    const response = await fetch(
-      `https://${shop}/admin/api/2024-01/variants/${variantId}.json`,
-      {
-        headers: {
-          "X-Shopify-Access-Token": token,
-        },
-      }
-    );
-
-    const data = await response.json();
-
-    console.log("📦 Variant API response:", data);
-
-    return data?.variant?.inventory_item_id;
-  } catch (err) {
-    console.error("❌ Inventory fetch error:", err.message);
-    return null;
-  }
-}
-
-/* ================================
-   📩 SUBSCRIBE API
+   📩 NOTIFY API
 ================================ */
 app.post("/notify", async (req, res) => {
-  const { email, product_id, variant_id, shop } = req.body;
+  try {
+    const { email, product_id, variant_id, shop } = req.body;
 
-  console.log("📩 Notify Request:", req.body);
+    console.log("📥 Request aayi:", req.body);
 
-  if (!email || !variant_id || !shop) {
-    return res.status(400).json({
-      message: "email, variant_id, shop required",
-    });
-  }
+    if (!variant_id || !shop) {
+      return res.status(400).json({ error: "Missing data" });
+    }
 
-  const token = SHOP_DATA[shop];
+    /* ================================
+       🟢 STEP 1: Variant → Inventory Item ID
+    ================================= */
+    const variantRes = await fetch(
+      `https://${shop}/admin/api/2024-01/variants/${variant_id}.json`,
+      {
+        headers: {
+          "X-Shopify-Access-Token": ACCESS_TOKEN,
+          "Content-Type": "application/json",
+        },
+      }
+    );
 
-  if (!token) {
-    return res.status(400).json({
-      message: "Shop not authenticated",
-    });
-  }
+    const variantData = await variantRes.json();
 
-  const inventory_item_id = await getInventoryItemId(
-    variant_id,
-    shop,
-    token
-  );
+    if (!variantData.variant) {
+      return res.status(404).json({ error: "Variant not found" });
+    }
 
-  if (!inventory_item_id) {
-    return res.status(500).json({
-      message: "Inventory ID not found",
-    });
-  }
+    const inventory_item_id = variantData.variant.inventory_item_id;
 
-  const exists = subscribers.find(
-    (u) =>
-      u.email === email &&
-      u.variant_id === variant_id &&
-      u.shop === shop
-  );
+    console.log("✅ Inventory Item ID:", inventory_item_id);
 
-  if (exists) {
-    return res.json({ message: "Already subscribed" });
-  }
+    /* ================================
+       🟢 STEP 2: Inventory Levels (Stock)
+    ================================= */
+    const inventoryRes = await fetch(
+      `https://${shop}/admin/api/2024-01/inventory_levels.json?inventory_item_ids=${inventory_item_id}`,
+      {
+        headers: {
+          "X-Shopify-Access-Token": ACCESS_TOKEN,
+        },
+      }
+    );
 
-  subscribers.push({
-    email,
-    product_id,
-    variant_id,
-    inventory_item_id: String(inventory_item_id).trim(),
-    shop,
-    notified: false,
-  });
+    const inventoryData = await inventoryRes.json();
 
-  console.log("📦 Subscribers:", subscribers);
+    console.log("📦 Inventory Data:", inventoryData);
 
-  res.json({ success: true });
-});
+    const available =
+      inventoryData.inventory_levels?.[0]?.available ?? 0;
 
-/* ================================
-   🔔 SHOPIFY WEBHOOK
-================================ */
-app.post("/webhook", (req, res) => {
-  const data = req.body;
+    console.log("📊 Available Stock:", available);
 
-  console.log("📦 Webhook received:", data);
-
-  const inventoryItemId = String(data.inventory_item_id).trim();
-  const available = Number(data.available || 0);
-
-  if (available <= 0) {
-    return res.sendStatus(200);
-  }
-
-  console.log("🔍 Comparing inventory IDs...");
-
-  const users = subscribers.filter((u) => {
-    const match =
-      String(u.inventory_item_id).trim() === inventoryItemId &&
-      u.notified === false;
-
-    console.log("DB:", u.inventory_item_id, "WEB:", inventoryItemId, "MATCH:", match);
-
-    return match;
-  });
-
-  if (users.length > 0) {
-    users.forEach((user) => {
-      console.log("📧 Notifying:", user.email);
-      user.notified = true;
+    /* ================================
+       🟢 RESPONSE
+    ================================= */
+    res.json({
+      success: true,
+      inventory_item_id,
+      available,
     });
 
-    console.log("✅ SUCCESS: Stock matched & notifications sent");
-  } else {
-    console.log("⚠️ No matching subscribers found");
+  } catch (error) {
+    console.error("❌ Error:", error);
+    res.status(500).json({ error: "Server error" });
   }
-
-  res.sendStatus(200);
-});
-
-/* ================================
-   🏠 HOME
-================================ */
-app.get("/", (req, res) => {
-  res.send("Server running 🚀");
 });
 
 /* ================================
    🚀 START SERVER
 ================================ */
 app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
