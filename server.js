@@ -9,9 +9,54 @@ const PORT = process.env.PORT || 3000;
 
 // 🔐 Shopify Access Token (Render ENV me set karo)
 const ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
-
+const KLAVIYO_API_KEY = process.env.KLAVIYO_API_KEY;
 // 📦 Temporary storage (production me DB use karo)
 let subscribers = [];
+
+/* =================================
+   📧 KLAVIYO EVENT FUNCTION
+================================= */
+async function sendKlaviyoEvent(email) {
+  try {
+    const res = await fetch("https://a.klaviyo.com/api/events/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Klaviyo-API-Key ${KLAVIYO_API_KEY}`,
+        "revision": "2023-10-15",
+      },
+      body: JSON.stringify({
+        data: {
+          type: "event",
+          attributes: {
+            profile: {
+              data: {
+                type: "profile",
+                attributes: {
+                  email: email,
+                },
+              },
+            },
+            metric: {
+              data: {
+                type: "metric",
+                attributes: {
+                  name: "Back In Stock",
+                },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    const data = await res.json();
+    console.log("✅ Klaviyo event sent:", data);
+
+  } catch (err) {
+    console.error("❌ Klaviyo error:", err);
+  }
+}
 
 /* =================================
    📩 NOTIFY API (Frontend hit karega)
@@ -77,6 +122,14 @@ app.post("/webhook", (req, res) => {
     console.log("📌 Stored subscribers:", subscribers);
     console.log("🔍 Incoming inventory_item_id:", inventory_item_id);
 
+      // ❗ Agar stock 0 hai to kuch mat karo
+    if (available <= 0) {
+      console.log("⛔ Still out of stock");
+      return res.sendStatus(200);
+    }
+
+    console.log("🟢 Stock available → checking users");
+
     // 🟢 MATCH USERS
     const matchedUsers = subscribers.filter(
       (sub) =>
@@ -88,12 +141,17 @@ app.post("/webhook", (req, res) => {
     if (matchedUsers.length === 0) {
       console.log("⚠️ No matching subscribers found");
     } else {
-      console.log("✅ Users found → send email");
+      console.log("✅ Sending Klaviyo events");
 
-      // 👉 yaha email logic add kar sakte ho
-      matchedUsers.forEach((user) => {
-        console.log(`📧 Send email to: ${user.email}`);
-      });
+      for (const user of matchedUsers) {
+        await sendKlaviyoEvent(user.email);
+      }
+
+      // 🧹 Remove users (duplicate email avoid)
+      subscribers = subscribers.filter(
+        (sub) =>
+          sub.inventory_item_id.toString() !== inventory_item_id.toString()
+      );
     }
 
     res.sendStatus(200);
