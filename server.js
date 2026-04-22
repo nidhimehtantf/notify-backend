@@ -22,13 +22,16 @@ async function sendKlaviyoEvent(email) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Klaviyo-API-Key ${KLAVIYO_API_KEY}`,
+        "Authorization": `Klaviyo-API-Key ${process.env.KLAVIYO_API_KEY}`,
         "revision": "2023-10-15",
       },
       body: JSON.stringify({
         data: {
           type: "event",
           attributes: {
+            properties: {   // ✅ REQUIRED FIELD
+              source: "shopify",
+            },
             profile: {
               data: {
                 type: "profile",
