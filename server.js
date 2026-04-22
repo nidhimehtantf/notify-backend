@@ -113,7 +113,7 @@ app.post("/notify", async (req, res) => {
 /* =================================
    🔔 WEBHOOK (Shopify se aayega)
 ================================= */
-app.post("/webhook", (req, res) => {
+app.post("/webhook", async (req, res) => {
   try {
     const { inventory_item_id, available } = req.body;
 
